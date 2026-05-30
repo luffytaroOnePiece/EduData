@@ -592,7 +592,4 @@ If information is outside the context window, the model cannot actively reason o
 
 ---
 
-## 📌 Source
-
-Converted and reformatted from the uploaded markdown notes. fileciteturn0file0
 
