@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Primitives — Concurrency Deep Dive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Base ───────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090e;
+  --bg2:#0f0f17;
+  --bg3:#14141f;
+  --bg4:#1a1a28;
+  --surface:#1e1e2e;
+  --surface2:#252538;
+  --border:#2a2a40;
+  --border2:#333350;
+  --text:#e8e8f0;
+  --text2:#9898b8;
+  --text3:#5a5a78;
+  --accent:#6e6bfa;
+  --accent2:#9b8ff5;
+  --go:#00add8;
+  --go2:#1a6e8a;
+  --py:#ffd43b;
+  --py2:#8a6e00;
+  --green:#3ecf8e;
+  --red:#f87171;
+  --orange:#fb923c;
+  --pink:#f472b6;
+  --r:8px;
+  --r2:14px;
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:'DM Sans',sans-serif;
+  font-weight:300;
+  line-height:1.75;
+  overflow-x:hidden;
+}
+
+/* ── Noise texture overlay ──────────────────────────────────── */
+body::before{
+  content:'';
+  position:fixed;inset:0;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  opacity:0.025;
+  pointer-events:none;
+  z-index:0;
+}
+
+/* ── Navigation ─────────────────────────────────────────────── */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 2rem;
+  height:60px;
+  background:rgba(9,9,14,0.85);
+  backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--border);
+}
+.nav-brand{
+  font-family:'Syne',sans-serif;
+  font-weight:800;
+  font-size:1rem;
+  letter-spacing:-0.02em;
+  color:var(--accent);
+  text-decoration:none;
+}
+.nav-links{
+  display:flex;gap:0.25rem;
+  list-style:none;
+}
+.nav-links a{
+  font-size:0.75rem;
+  color:var(--text3);
+  text-decoration:none;
+  padding:0.3rem 0.7rem;
+  border-radius:4px;
+  transition:color 0.2s,background 0.2s;
+  font-family:'Syne',sans-serif;
+  font-weight:600;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.nav-links a:hover{color:var(--text);background:var(--surface)}
+
+/* ── Hero ───────────────────────────────────────────────────── */
+.hero{
+  position:relative;
+  min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;
+  padding:6rem 2rem 4rem;
+  overflow:hidden;
+}
+.hero-glow{
+  position:absolute;
+  width:800px;height:800px;
+  border-radius:50%;
+  background:radial-gradient(ellipse, rgba(110,107,250,0.12) 0%, transparent 65%);
+  top:50%;left:50%;transform:translate(-50%,-50%);
+  pointer-events:none;
+}
+.hero-grid{
+  position:absolute;inset:0;
+  background-image:
+    linear-gradient(rgba(42,42,64,0.4) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42,42,64,0.4) 1px, transparent 1px);
+  background-size:60px 60px;
+  mask-image:radial-gradient(ellipse 80% 60% at 50% 50%, black 30%, transparent 100%);
+  pointer-events:none;
+}
+.hero-eyebrow{
+  font-family:'Syne',sans-serif;
+  font-size:0.7rem;
+  font-weight:700;
+  letter-spacing:0.2em;
+  text-transform:uppercase;
+  color:var(--accent);
+  margin-bottom:1.5rem;
+  opacity:0;
+  animation:fadeUp 0.8s 0.2s ease forwards;
+}
+.hero h1{
+  font-family:'Syne',sans-serif;
+  font-size:clamp(2.8rem,7vw,6rem);
+  font-weight:800;
+  line-height:0.95;
+  letter-spacing:-0.04em;
+  color:#fff;
+  margin-bottom:1.5rem;
+  opacity:0;
+  animation:fadeUp 0.8s 0.4s ease forwards;
+}
+.hero h1 em{
+  font-style:normal;
+  background:linear-gradient(135deg,var(--accent),var(--pink));
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.hero-sub{
+  font-size:1.1rem;
+  color:var(--text2);
+  max-width:560px;
+  line-height:1.7;
+  margin-bottom:2.5rem;
+  font-weight:300;
+  opacity:0;
+  animation:fadeUp 0.8s 0.6s ease forwards;
+}
+.hero-pills{
+  display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center;
+  opacity:0;
+  animation:fadeUp 0.8s 0.8s ease forwards;
+}
+.pill{
+  display:inline-flex;align-items:center;gap:0.4rem;
+  font-size:0.75rem;font-family:'Syne',sans-serif;font-weight:600;
+  padding:0.35rem 0.9rem;
+  border-radius:100px;
+  border:1px solid var(--border2);
+  color:var(--text2);
+  text-decoration:none;
+  transition:all 0.2s;
+}
+.pill:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.pill-dot{width:6px;height:6px;border-radius:50%}
+
+/* ── Main layout ─────────────────────────────────────────────── */
+main{
+  position:relative;z-index:1;
+  max-width:1100px;margin:0 auto;
+  padding:0 1.5rem 6rem;
+}
+
+/* ── Section headers ─────────────────────────────────────────── */
+.section-header{
+  display:flex;align-items:center;gap:1rem;
+  padding:3rem 0 1.5rem;
+  border-bottom:1px solid var(--border);
+  margin-bottom:2rem;
+}
+.section-num{
+  font-family:'JetBrains Mono',monospace;
+  font-size:0.7rem;
+  color:var(--text3);
+  font-weight:500;
+  min-width:28px;
+}
+.section-title{
+  font-family:'Syne',sans-serif;
+  font-size:clamp(1.6rem,3vw,2.4rem);
+  font-weight:800;
+  letter-spacing:-0.03em;
+  color:#fff;
+}
+.section-tag{
+  margin-left:auto;
+  font-size:0.65rem;
+  font-family:'Syne',sans-serif;
+  font-weight:700;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  padding:0.25rem 0.75rem;
+  border-radius:4px;
+}
+
+/* ── Concept cards ───────────────────────────────────────────── */
+.concept-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--r2);
+  padding:1.75rem;
+  margin-bottom:1.25rem;
+  transition:border-color 0.25s,transform 0.2s;
+  position:relative;
+  overflow:hidden;
+}
+.concept-card::before{
+  content:'';
+  position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  opacity:0;
+  transition:opacity 0.3s;
+}
+.concept-card:hover{border-color:var(--border2);transform:translateY(-1px)}
+.concept-card:hover::before{opacity:0.6}
+
+.card-header{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  gap:1rem;margin-bottom:1rem;
+  flex-wrap:wrap;
+}
+.card-title-group{}
+.card-badge{
+  font-size:0.65rem;
+  font-family:'JetBrains Mono',monospace;
+  font-weight:500;
+  letter-spacing:0.06em;
+  padding:0.2rem 0.6rem;
+  border-radius:4px;
+  margin-bottom:0.5rem;
+  display:inline-block;
+}
+.card-title{
+  font-family:'Syne',sans-serif;
+  font-size:1.3rem;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  color:#fff;
+  margin-bottom:0.25rem;
+}
+.card-subtitle{font-size:0.85rem;color:var(--text3)}
+
+.analogy-box{
+  background:var(--bg4);
+  border:1px solid var(--border);
+  border-left:3px solid var(--accent);
+  border-radius:var(--r);
+  padding:1rem 1.25rem;
+  margin:1rem 0 1.25rem;
+  font-size:0.9rem;
+  color:var(--text2);
+  line-height:1.7;
+}
+.analogy-box strong{color:var(--accent);font-weight:500}
+
+.explain-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:0.75rem;
+  margin:1rem 0 1.25rem;
+}
+.explain-cell{
+  background:var(--bg3);
+  border:1px solid var(--border);
+  border-radius:var(--r);
+  padding:0.85rem 1rem;
+}
+.explain-cell-label{
+  font-size:0.65rem;
+  font-family:'Syne',sans-serif;
+  font-weight:700;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  color:var(--text3);
+  margin-bottom:0.35rem;
+}
+.explain-cell-val{
+  font-size:0.85rem;
+  color:var(--text);
+  font-weight:400;
+}
+
+/* ── When-to-use strip ───────────────────────────────────────── */
+.when-strip{
+  display:flex;flex-wrap:wrap;gap:0.4rem;
+  margin:0.75rem 0 1.25rem;
+}
+.when-tag{
+  font-size:0.72rem;
+  background:var(--bg4);
+  border:1px solid var(--border);
+  color:var(--text2);
+  padding:0.2rem 0.65rem;
+  border-radius:100px;
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────── */
+.code-tabs{margin-top:1.25rem}
+.code-tab-bar{
+  display:flex;gap:0;
+  border-bottom:1px solid var(--border);
+  margin-bottom:0;
+}
+.code-tab-btn{
+  font-size:0.72rem;
+  font-family:'Syne',sans-serif;
+  font-weight:700;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  padding:0.55rem 1.1rem;
+  background:transparent;
+  border:none;
+  border-bottom:2px solid transparent;
+  color:var(--text3);
+  cursor:pointer;
+  transition:color 0.2s,border-color 0.2s;
+  display:flex;align-items:center;gap:0.4rem;
+}
+.code-tab-btn:hover{color:var(--text2)}
+.code-tab-btn.active-go{color:var(--go);border-bottom-color:var(--go)}
+.code-tab-btn.active-py{color:var(--py);border-bottom-color:var(--py)}
+.code-panel{display:none}
+.code-panel.active{display:block}
+
+pre{
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-top:none;
+  border-radius:0 0 var(--r) var(--r);
+  padding:1.25rem 1.5rem;
+  overflow-x:auto;
+  font-family:'JetBrains Mono',monospace;
+  font-size:0.8rem;
+  line-height:1.8;
+  color:var(--text);
+  position:relative;
+}
+pre .cmt{color:#4e5072}
+pre .kw{color:#c792ea}
+pre .fn{color:#82aaff}
+pre .str{color:#c3e88d}
+pre .num{color:#f78c6c}
+pre .type{color:#ffcb6b}
+pre .op{color:var(--text3)}
+pre .go-color{color:var(--go)}
+pre .py-color{color:var(--py)}
+pre .ok{color:var(--green)}
+pre .warn{color:var(--orange)}
+pre .err{color:var(--red)}
+
+/* ── Visual diagram ──────────────────────────────────────────── */
+.diagram{
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:var(--r);
+  padding:1.25rem;
+  margin:1rem 0;
+  overflow-x:auto;
+}
+
+/* ── Gotchas ─────────────────────────────────────────────────── */
+.gotcha{
+  background:rgba(248,113,113,0.07);
+  border:1px solid rgba(248,113,113,0.2);
+  border-radius:var(--r);
+  padding:0.85rem 1.1rem;
+  font-size:0.85rem;
+  color:#fca5a5;
+  margin-top:1rem;
+  line-height:1.6;
+}
+.gotcha::before{content:'⚠  ';font-size:0.9rem}
+
+.tip{
+  background:rgba(62,207,142,0.07);
+  border:1px solid rgba(62,207,142,0.2);
+  border-radius:var(--r);
+  padding:0.85rem 1.1rem;
+  font-size:0.85rem;
+  color:#6ee7b7;
+  margin-top:1rem;
+  line-height:1.6;
+}
+.tip::before{content:'💡  '}
+
+/* ── Comparison table ────────────────────────────────────────── */
+.cmp-table{
+  width:100%;border-collapse:collapse;
+  font-size:0.82rem;
+  margin-top:2rem;
+}
+.cmp-table th{
+  font-family:'Syne',sans-serif;
+  font-size:0.65rem;
+  font-weight:700;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  color:var(--text3);
+  padding:0.6rem 1rem;
+  text-align:left;
+  border-bottom:1px solid var(--border);
+}
+.cmp-table td{
+  padding:0.75rem 1rem;
+  border-bottom:1px solid var(--border);
+  color:var(--text2);
+  vertical-align:top;
+  line-height:1.5;
+}
+.cmp-table tr:last-child td{border-bottom:none}
+.cmp-table tr:hover td{background:var(--bg3)}
+.cmp-table td:first-child{color:#fff;font-family:'Syne',sans-serif;font-weight:600;font-size:0.85rem}
+.dot-g{color:var(--green)}
+.dot-r{color:var(--red)}
+.dot-o{color:var(--orange)}
+
+/* ── Footer ──────────────────────────────────────────────────── */
+footer{
+  border-top:1px solid var(--border);
+  text-align:center;
+  padding:3rem 2rem;
+  font-size:0.8rem;
+  color:var(--text3);
+  font-family:'Syne',sans-serif;
+  font-weight:600;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+@keyframes fadeUp{
+  from{opacity:0;transform:translateY(20px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.reveal{
+  opacity:0;transform:translateY(24px);
+  transition:opacity 0.6s ease, transform 0.6s ease;
+}
+.reveal.visible{opacity:1;transform:none}
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media(max-width:640px){
+  .nav-links{display:none}
+  .hero h1{font-size:2.4rem}
+  pre{font-size:0.72rem;padding:1rem}
+  .concept-card{padding:1.25rem}
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-brand">SYNC·PRIMITIVES</a>
+  <ul class="nav-links">
+    <li><a href="#mutex">Mutex</a></li>
+    <li><a href="#semaphore">Semaphore</a></li>
+    <li><a href="#spinlock">Spinlock</a></li>
+    <li><a href="#binary">Binary</a></li>
+    <li><a href="#rwmutex">RWMutex</a></li>
+    <li><a href="#priority">Priority</a></li>
+    <li><a href="#compare">Compare</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="hero-eyebrow">Concurrency Deep Dive</div>
+  <h1>Sync <em>Primitives</em><br>Demystified</h1>
+  <p class="hero-sub">
+    Mutex, semaphore, spin lock, binary semaphore, RWMutex, and priority-inheritance mutex —
+    explained clearly with <strong>Go</strong> &amp; <strong>Python</strong> code.
+  </p>
+  <div class="hero-pills">
+    <a href="#mutex" class="pill"><span class="pill-dot" style="background:var(--go)"></span>Go</a>
+    <a href="#mutex" class="pill"><span class="pill-dot" style="background:var(--py)"></span>Python</a>
+    <a href="#mutex" class="pill">6 Primitives</a>
+    <a href="#compare" class="pill">Comparison Table</a>
+  </div>
+</section>
+
+<!-- MAIN -->
+<main>
+
+<!-- ══════════════════════════════════════════════════════════════
+     1. MUTEX
+════════════════════════════════════════════════════════════════ -->
+<div id="mutex" class="section-header reveal">
+  <span class="section-num">01</span>
+  <h2 class="section-title">Mutex</h2>
+  <span class="section-tag" style="background:rgba(110,107,250,0.12);color:var(--accent)">Mutual Exclusion</span>
+</div>
+
+<div class="concept-card reveal">
+  <div class="card-header">
+    <div class="card-title-group">
+      <span class="card-badge" style="background:rgba(110,107,250,0.15);color:var(--accent)">sync.Mutex / threading.Lock</span>
+      <div class="card-title">What is a Mutex?</div>
+      <div class="card-subtitle">The most fundamental synchronization primitive</div>
+    </div>
+  </div>
+
+  <p style="color:var(--text2);font-size:0.92rem;margin-bottom:0.75rem;">
+    A <strong style="color:var(--text)">mutex</strong> (short for <em>mutual exclusion</em>) is a lock that ensures only <strong style="color:var(--text)">one goroutine/thread</strong> can access a shared resource at a time. When one goroutine holds the mutex, all others that try to acquire it will <strong style="color:var(--accent)">sleep</strong> — they're blocked by the OS and consume zero CPU while waiting.
+  </p>
+
+  <div class="analogy-box">
+    🚽 <strong>Bathroom Key Analogy:</strong> Imagine one bathroom key hanging on a hook. Only the person holding the key can use the bathroom. Everyone else queues up and waits. When they're done, they hang the key back — the next person wakes up and grabs it.
+  </div>
+
+  <div class="explain-grid">
+    <div class="explain-cell"><div class="explain-cell-label">Blocking?</div><div class="explain-cell-val">Yes — waiters sleep (OS blocks them)</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">CPU while waiting?</div><div class="explain-cell-val">Zero — fully idle</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Ownership?</div><div class="explain-cell-val">Yes — locker must unlock it</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Concurrency</div><div class="explain-cell-val">1 at a time</div></div>
+  </div>
+
+  <div style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem;font-family:'Syne',sans-serif;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">When to use</div>
+  <div class="when-strip">
+    <span class="when-tag">shared counter</span>
+    <span class="when-tag">writing to shared map</span>
+    <span class="when-tag">updating shared struct</span>
+    <span class="when-tag">any write-access to shared state</span>
+  </div>
+
+  <div class="code-tabs">
+    <div class="code-tab-bar">
+      <button class="code-tab-btn active-go" onclick="switchTab(this,'mutex-go','mutex-py','go')">
+        <span style="color:var(--go)">●</span> Go
+      </button>
+      <button class="code-tab-btn" onclick="switchTab(this,'mutex-py','mutex-go','py')">
+        <span style="color:var(--py)">●</span> Python
+      </button>
+    </div>
+    <div id="mutex-go" class="code-panel active">
+<pre><span class="cmt">// ─── Go: Mutex ───────────────────────────────────────────────────────</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"sync"</span>
+)
+
+<span class="kw">var</span> (
+    counter <span class="type">int</span>
+    mu      sync.Mutex  <span class="cmt">// The lock — zero value is ready to use</span>
+)
+
+<span class="kw">func</span> <span class="fn">increment</span>(wg *sync.WaitGroup) {
+    <span class="kw">defer</span> wg.Done()
+
+    mu.Lock()          <span class="cmt">// Goroutine grabs the lock; others SLEEP here</span>
+    <span class="kw">defer</span> mu.Unlock()  <span class="cmt">// Always release — even if panic occurs</span>
+
+    counter++          <span class="cmt">// ✅ Safe: only one goroutine runs this at a time</span>
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="kw">var</span> wg sync.WaitGroup
+
+    <span class="kw">for</span> i := <span class="num">0</span>; i < <span class="num">1000</span>; i++ {
+        wg.Add(<span class="num">1</span>)
+        <span class="kw">go</span> <span class="fn">increment</span>(&wg)  <span class="cmt">// 1000 goroutines race to increment</span>
+    }
+
+    wg.Wait()
+    fmt.<span class="fn">Println</span>(<span class="str">"Final count:"</span>, counter) <span class="cmt">// Always 1000 ✅</span>
+}
+
+<span class="cmt">// Without mutex: counter would be anywhere from ~950 to 1000
+// due to race conditions (data race = undefined behaviour)</span></pre>
+    </div>
+    <div id="mutex-py" class="code-panel">
+<pre><span class="cmt"># ─── Python: Mutex (threading.Lock) ─────────────────────────────────</span>
+<span class="kw">import</span> threading
+
+counter = <span class="num">0</span>
+mu = threading.Lock()  <span class="cmt"># The lock</span>
+
+<span class="kw">def</span> <span class="fn">increment</span>():
+    <span class="kw">global</span> counter
+    <span class="cmt"># "with mu" is idiomatic — acquires on enter, releases on exit</span>
+    <span class="kw">with</span> mu:               <span class="cmt">  # Same as mu.acquire() ... mu.release()</span>
+        counter += <span class="num">1</span>      <span class="cmt">  # ✅ Safe: only one thread here at a time</span>
+
+threads = [threading.Thread(target=increment) <span class="kw">for</span> _ <span class="kw">in</span> <span class="fn">range</span>(<span class="num">1000</span>)]
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.start()
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.join()
+
+<span class="fn">print</span>(<span class="str">f"Final count: {counter}"</span>)  <span class="cmt"># Always 1000 ✅</span>
+
+<span class="cmt"># ── Note on Python's GIL ──────────────────────────────────────────────
+# Python has a Global Interpreter Lock (GIL) that allows only one thread
+# to execute Python bytecode at a time. This means counter++ MIGHT work
+# without a mutex for CPython, but it's NOT guaranteed — always use locks
+# for correctness. The GIL is being removed in Python 3.13+ (free-threaded).</span></pre>
+    </div>
+  </div>
+
+  <div class="gotcha">Don't unlock from a different goroutine/thread than the one that locked — mutex ownership belongs to the locker. Unlocking twice causes a panic in Go.</div>
+  <div class="tip">In Go, <code>defer mu.Unlock()</code> immediately after <code>mu.Lock()</code> is the standard pattern. It guarantees the unlock runs even if the function panics.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     2. COUNTING SEMAPHORE
+════════════════════════════════════════════════════════════════ -->
+<div id="semaphore" class="section-header reveal">
+  <span class="section-num">02</span>
+  <h2 class="section-title">Counting Semaphore</h2>
+  <span class="section-tag" style="background:rgba(0,173,216,0.1);color:var(--go)">Concurrency Limiter</span>
+</div>
+
+<div class="concept-card reveal">
+  <div class="card-header">
+    <div class="card-title-group">
+      <span class="card-badge" style="background:rgba(0,173,216,0.12);color:var(--go)">channel / threading.Semaphore</span>
+      <div class="card-title">What is a Counting Semaphore?</div>
+      <div class="card-subtitle">Controls how many can work simultaneously</div>
+    </div>
+  </div>
+
+  <p style="color:var(--text2);font-size:0.92rem;margin-bottom:0.75rem;">
+    A semaphore holds an internal <strong style="color:var(--text)">count N</strong>. Acquiring it decrements the count; releasing increments it. When the count hits zero, new acquirers block. Unlike a mutex (N=1), a semaphore can allow <strong style="color:var(--text)">multiple goroutines</strong> in the critical section simultaneously — up to N.
+  </p>
+
+  <div class="analogy-box">
+    🅿️ <strong>Parking Lot Analogy:</strong> A parking lot has 3 spaces. Up to 3 cars (goroutines) can be inside simultaneously. The 4th car must wait at the barrier until someone leaves. The semaphore count = available spaces.
+  </div>
+
+  <div class="explain-grid">
+    <div class="explain-cell"><div class="explain-cell-label">Blocking?</div><div class="explain-cell-val">Yes — when count = 0</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">CPU while waiting?</div><div class="explain-cell-val">Zero — goroutine sleeps</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Ownership?</div><div class="explain-cell-val">No — anyone can release</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Concurrency</div><div class="explain-cell-val">Up to N at a time</div></div>
+  </div>
+
+  <div style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem;font-family:'Syne',sans-serif;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">When to use</div>
+  <div class="when-strip">
+    <span class="when-tag">limit DB connections</span>
+    <span class="when-tag">rate-limit HTTP calls</span>
+    <span class="when-tag">worker pool concurrency cap</span>
+    <span class="when-tag">throttle expensive operations</span>
+  </div>
+
+  <div class="code-tabs">
+    <div class="code-tab-bar">
+      <button class="code-tab-btn active-go" onclick="switchTab(this,'sem-go','sem-py','go')">
+        <span style="color:var(--go)">●</span> Go
+      </button>
+      <button class="code-tab-btn" onclick="switchTab(this,'sem-py','sem-go','py')">
+        <span style="color:var(--py)">●</span> Python
+      </button>
+    </div>
+    <div id="sem-go" class="code-panel active">
+<pre><span class="cmt">// ─── Go: Counting Semaphore via buffered channel ─────────────────────</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"sync"</span>
+    <span class="str">"time"</span>
+)
+
+<span class="cmt">// Buffered channel with capacity N = semaphore with N slots.
+// Sending = acquire (take a slot). Receiving = release (free a slot).</span>
+<span class="kw">const</span> maxConcurrent = <span class="num">3</span>
+<span class="kw">var</span> sem = <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{}, maxConcurrent) <span class="cmt">// 🅿️ 3 parking spaces</span>
+
+<span class="kw">func</span> <span class="fn">worker</span>(id <span class="type">int</span>, wg *sync.WaitGroup) {
+    <span class="kw">defer</span> wg.Done()
+
+    sem <- <span class="kw">struct</span>{}{}        <span class="cmt">// Acquire: "I'm entering the lot"</span>
+    <span class="kw">defer</span> <span class="kw">func</span>() { &lt;-sem }() <span class="cmt">// Release: "I'm leaving" (always runs)</span>
+
+    <span class="cmt">// At most 3 workers are between these lines simultaneously</span>
+    fmt.<span class="fn">Printf</span>(<span class="str">"Worker %d started\n"</span>, id)
+    time.<span class="fn">Sleep</span>(<span class="num">200</span> * time.Millisecond) <span class="cmt">// Simulate real work</span>
+    fmt.<span class="fn">Printf</span>(<span class="str">"Worker %d done\n"</span>, id)
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="kw">var</span> wg sync.WaitGroup
+
+    <span class="kw">for</span> i := <span class="num">1</span>; i <= <span class="num">10</span>; i++ { <span class="cmt">// 10 workers, only 3 run at once</span>
+        wg.Add(<span class="num">1</span>)
+        <span class="kw">go</span> <span class="fn">worker</span>(i, &wg)
+    }
+    wg.Wait()
+    fmt.<span class="fn">Println</span>(<span class="str">"All done"</span>)
+}
+
+<span class="cmt">// Tip: golang.org/x/sync/semaphore provides a weighted semaphore
+// useful when some tasks are "heavier" and should count as 2 or 3 slots.</span></pre>
+    </div>
+    <div id="sem-py" class="code-panel">
+<pre><span class="cmt"># ─── Python: Counting Semaphore ──────────────────────────────────────</span>
+<span class="kw">import</span> threading
+<span class="kw">import</span> time
+
+<span class="cmt"># threading.Semaphore(N) — built-in counting semaphore</span>
+sem = threading.Semaphore(<span class="num">3</span>)  <span class="cmt">  # Only 3 threads at a time</span>
+
+<span class="kw">def</span> <span class="fn">worker</span>(thread_id):
+    <span class="kw">with</span> sem:                   <span class="cmt">  # acquire on enter, release on exit</span>
+        <span class="fn">print</span>(<span class="str">f"Worker {thread_id} running"</span>)
+        time.sleep(<span class="num">0.2</span>)
+        <span class="fn">print</span>(<span class="str">f"Worker {thread_id} done"</span>)
+
+threads = [
+    threading.Thread(target=worker, args=(i,))
+    <span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(<span class="num">1</span>, <span class="num">11</span>)     <span class="cmt">  # 10 threads, only 3 concurrent</span>
+]
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.start()
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.join()
+
+<span class="cmt"># ── asyncio version (non-blocking I/O) ───────────────────────────────
+# import asyncio
+# sem = asyncio.Semaphore(3)
+# async def worker(i):
+#     async with sem:
+#         await asyncio.sleep(0.2)  # non-blocking wait</span></pre>
+    </div>
+  </div>
+  <div class="tip">In Go, a buffered channel <em>is</em> the idiomatic semaphore — no library needed. <code>struct{}{}</code> uses zero memory as the token.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     3. SPIN LOCK
+════════════════════════════════════════════════════════════════ -->
+<div id="spinlock" class="section-header reveal">
+  <span class="section-num">03</span>
+  <h2 class="section-title">Spin Lock</h2>
+  <span class="section-tag" style="background:rgba(251,146,60,0.1);color:var(--orange)">Busy-Wait Lock</span>
+</div>
+
+<div class="concept-card reveal">
+  <div class="card-header">
+    <div class="card-title-group">
+      <span class="card-badge" style="background:rgba(251,146,60,0.12);color:var(--orange)">atomic.CompareAndSwap / threading</span>
+      <div class="card-title">What is a Spin Lock?</div>
+      <div class="card-subtitle">Keeps checking in a tight loop instead of sleeping</div>
+    </div>
+  </div>
+
+  <p style="color:var(--text2);font-size:0.92rem;margin-bottom:0.75rem;">
+    A spin lock does NOT put the goroutine to sleep. Instead it <strong style="color:var(--text)">loops continuously</strong> ("spins") checking if the lock is free. This burns CPU but avoids the overhead of an OS context switch (~1–10 µs). Only beneficial when the lock is held for <strong style="color:var(--orange)">very short durations</strong>.
+  </p>
+
+  <div class="analogy-box">
+    🔄 <strong>Impatient Person Analogy:</strong> Instead of sitting in the waiting room (sleeping), you stand right outside the door and keep knocking every millisecond. Wasteful if the wait is long, but faster than signing in at reception if someone's just washing their hands.
+  </div>
+
+  <div class="explain-grid">
+    <div class="explain-cell"><div class="explain-cell-label">Blocking?</div><div class="explain-cell-val">No — active loop</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">CPU while waiting?</div><div class="explain-cell-val"><span class="dot-r">High</span> — burns cycles</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Ownership?</div><div class="explain-cell-val">Yes</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Best for</div><div class="explain-cell-val">Sub-microsecond holds</div></div>
+  </div>
+
+  <div style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem;font-family:'Syne',sans-serif;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">When to use</div>
+  <div class="when-strip">
+    <span class="when-tag">kernel code / OS internals</span>
+    <span class="when-tag">interrupt handlers</span>
+    <span class="when-tag">lock held &lt; 1µs</span>
+    <span class="when-tag">real-time / low-latency systems</span>
+  </div>
+
+  <div class="code-tabs">
+    <div class="code-tab-bar">
+      <button class="code-tab-btn active-go" onclick="switchTab(this,'spin-go','spin-py','go')">
+        <span style="color:var(--go)">●</span> Go
+      </button>
+      <button class="code-tab-btn" onclick="switchTab(this,'spin-py','spin-go','py')">
+        <span style="color:var(--py)">●</span> Python
+      </button>
+    </div>
+    <div id="spin-go" class="code-panel active">
+<pre><span class="cmt">// ─── Go: Spin Lock via atomic ─────────────────────────────────────────</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"runtime"</span>
+    <span class="str">"sync"</span>
+    <span class="str">"sync/atomic"</span>
+)
+
+<span class="cmt">// SpinLock uses a single int32: 0 = unlocked, 1 = locked</span>
+<span class="kw">type</span> SpinLock <span class="kw">struct</span> {
+    state <span class="type">int32</span>
+}
+
+<span class="kw">func</span> (s *SpinLock) <span class="fn">Lock</span>() {
+    <span class="kw">for</span> {
+        <span class="cmt">// CompareAndSwap atomically: if state==0 then state=1 (locked), return true
+        // If state==1 already (someone else holds it), CAS returns false → keep spinning</span>
+        <span class="kw">if</span> atomic.<span class="fn">CompareAndSwapInt32</span>(&s.state, <span class="num">0</span>, <span class="num">1</span>) {
+            <span class="kw">return</span> <span class="cmt">// We grabbed the lock!</span>
+        }
+        <span class="cmt">// Yield to the Go scheduler — prevents complete CPU starvation of other goroutines</span>
+        runtime.<span class="fn">Gosched</span>()
+    }
+}
+
+<span class="kw">func</span> (s *SpinLock) <span class="fn">Unlock</span>() {
+    atomic.<span class="fn">StoreInt32</span>(&s.state, <span class="num">0</span>) <span class="cmt">// Atomic write: state = 0 (unlocked)</span>
+}
+
+<span class="kw">var</span> (
+    sl      SpinLock
+    counter <span class="type">int</span>
+)
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="kw">var</span> wg sync.WaitGroup
+    <span class="kw">for</span> i := <span class="num">0</span>; i < <span class="num">1000</span>; i++ {
+        wg.Add(<span class="num">1</span>)
+        <span class="kw">go</span> <span class="kw">func</span>() {
+            <span class="kw">defer</span> wg.Done()
+            sl.<span class="fn">Lock</span>()
+            counter++  <span class="cmt">// Protected section</span>
+            sl.<span class="fn">Unlock</span>()
+        }()
+    }
+    wg.Wait()
+    fmt.<span class="fn">Println</span>(<span class="str">"Counter:"</span>, counter) <span class="cmt">// 1000</span>
+}
+
+<span class="cmt">// ⚡ Spin vs Mutex — when does spin win?
+//   Spin wins when: hold time &lt; context-switch overhead (~1-5µs)
+//   Mutex wins when: hold time is long or many goroutines compete</span></pre>
+    </div>
+    <div id="spin-py" class="code-panel">
+<pre><span class="cmt"># ─── Python: Spin Lock via atomic flag ───────────────────────────────</span>
+<span class="kw">import</span> threading
+<span class="kw">import</span> time
+
+<span class="cmt"># Python doesn't have atomic CAS like Go, but we can simulate
+# a spin lock using a simple flag + busy-wait</span>
+<span class="kw">class</span> <span class="type">SpinLock</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self._lock = threading.Lock()  <span class="cmt"># Underlying OS lock</span>
+        self._spinning = <span class="kw">False</span>
+
+    <span class="kw">def</span> <span class="fn">acquire</span>(self):
+        <span class="kw">while True</span>:
+            <span class="cmt"># try_lock: non-blocking acquire attempt</span>
+            <span class="kw">if</span> self._lock.acquire(blocking=<span class="kw">False</span>):
+                <span class="kw">return</span>              <span class="cmt">  # Got it!</span>
+            <span class="cmt"># Couldn't get it — spin (yield CPU slice)</span>
+            time.sleep(<span class="num">0</span>)          <span class="cmt">  # Cooperative yield to other threads</span>
+
+    <span class="kw">def</span> <span class="fn">release</span>(self):
+        self._lock.release()
+
+<span class="cmt"># Usage</span>
+sl = SpinLock()
+counter = <span class="num">0</span>
+
+<span class="kw">def</span> <span class="fn">increment</span>():
+    <span class="kw">global</span> counter
+    sl.acquire()
+    <span class="kw">try</span>:
+        counter += <span class="num">1</span>
+    <span class="kw">finally</span>:
+        sl.release()   <span class="cmt">  # Always release, even on exception</span>
+
+threads = [threading.Thread(target=increment) <span class="kw">for</span> _ <span class="kw">in</span> <span class="fn">range</span>(<span class="num">500</span>)]
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.start()
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.join()
+<span class="fn">print</span>(<span class="str">f"Counter: {counter}"</span>)
+
+<span class="cmt"># ⚠️  In Python, spin locks rarely make sense due to the GIL.
+# Use threading.Lock() directly for production code.</span></pre>
+    </div>
+  </div>
+  <div class="gotcha">Never use a spin lock when the lock is held for more than a few microseconds — you'll burn entire CPU cores doing nothing useful. In user-space Go code, <code>sync.Mutex</code> is almost always the right choice.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     4. BINARY SEMAPHORE
+════════════════════════════════════════════════════════════════ -->
+<div id="binary" class="section-header reveal">
+  <span class="section-num">04</span>
+  <h2 class="section-title">Binary Semaphore</h2>
+  <span class="section-tag" style="background:rgba(244,114,182,0.1);color:var(--pink)">Signaling Primitive</span>
+</div>
+
+<div class="concept-card reveal">
+  <div class="card-header">
+    <div class="card-title-group">
+      <span class="card-badge" style="background:rgba(244,114,182,0.12);color:var(--pink)">channel(1) / threading.Semaphore(1)</span>
+      <div class="card-title">What is a Binary Semaphore?</div>
+      <div class="card-subtitle">A semaphore with max count = 1, but no ownership</div>
+    </div>
+  </div>
+
+  <p style="color:var(--text2);font-size:0.92rem;margin-bottom:0.75rem;">
+    A binary semaphore looks like a mutex — only 0 or 1 — but the <strong style="color:var(--text)">key difference</strong> is <strong style="color:var(--pink)">ownership</strong>. A mutex must be unlocked by the same goroutine that locked it. A binary semaphore can be <strong style="color:var(--text)">signaled by goroutine A and waited on by goroutine B</strong>. This makes it ideal for <em>event notification</em>.
+  </p>
+
+  <div class="analogy-box">
+    🚦 <strong>Traffic Light Analogy:</strong> One person (producer) controls the green light; another (consumer) waits at the red. The person at the light doesn't care who turned it green — they just go when it is. No "ownership" of the signal.
+  </div>
+
+  <div class="explain-grid">
+    <div class="explain-cell"><div class="explain-cell-label">Count range</div><div class="explain-cell-val">0 or 1 only</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Ownership?</div><div class="explain-cell-val"><span class="dot-r">No</span> — key difference from mutex</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Primary use</div><div class="explain-cell-val">Event signaling</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Cross-goroutine?</div><div class="explain-cell-val"><span class="dot-g">Yes</span> — A signals, B waits</div></div>
+  </div>
+
+  <div style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem;font-family:'Syne',sans-serif;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">When to use</div>
+  <div class="when-strip">
+    <span class="when-tag">producer → consumer notification</span>
+    <span class="when-tag">task completion signal</span>
+    <span class="when-tag">start gate (release N goroutines)</span>
+    <span class="when-tag">one-shot event</span>
+  </div>
+
+  <div class="code-tabs">
+    <div class="code-tab-bar">
+      <button class="code-tab-btn active-go" onclick="switchTab(this,'bin-go','bin-py','go')">
+        <span style="color:var(--go)">●</span> Go
+      </button>
+      <button class="code-tab-btn" onclick="switchTab(this,'bin-py','bin-go','py')">
+        <span style="color:var(--py)">●</span> Python
+      </button>
+    </div>
+    <div id="bin-go" class="code-panel active">
+<pre><span class="cmt">// ─── Go: Binary Semaphore via channel ────────────────────────────────</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"time"</span>
+)
+
+<span class="cmt">// A channel of capacity 1 IS a binary semaphore.
+// send = "signal"  |  receive = "wait"</span>
+<span class="kw">var</span> ready = <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{}, <span class="num">1</span>)
+
+<span class="kw">func</span> <span class="fn">producer</span>() {
+    time.<span class="fn">Sleep</span>(<span class="num">100</span> * time.Millisecond)
+    fmt.<span class="fn">Println</span>(<span class="str">"Producer: data is ready!"</span>)
+    ready <- <span class="kw">struct</span>{}{}  <span class="cmt">// Signal: "consumer, you can go now" 🟢</span>
+}
+
+<span class="kw">func</span> <span class="fn">consumer</span>() {
+    fmt.<span class="fn">Println</span>(<span class="str">"Consumer: waiting for data..."</span>)
+    &lt;-ready              <span class="cmt">// Wait: block until producer signals</span>
+    fmt.<span class="fn">Println</span>(<span class="str">"Consumer: got signal, processing!"</span>)
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="kw">go</span> <span class="fn">producer</span>()
+    <span class="fn">consumer</span>()  <span class="cmt">// main goroutine waits here</span>
+}
+
+<span class="cmt">// ── Start-gate pattern: release ALL goroutines simultaneously ─────────</span>
+<span class="kw">func</span> <span class="fn">startGateExample</span>() {
+    gate := <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{}) <span class="cmt">// Unbuffered — blocks all waiters</span>
+
+    <span class="kw">for</span> i := <span class="num">0</span>; i < <span class="num">5</span>; i++ {
+        <span class="kw">go</span> <span class="kw">func</span>(id <span class="type">int</span>) {
+            &lt;-gate  <span class="cmt">// All 5 goroutines park here</span>
+            fmt.<span class="fn">Printf</span>(<span class="str">"Goroutine %d off!\n"</span>, id)
+        }(i)
+    }
+
+    time.<span class="fn">Sleep</span>(<span class="num">10</span> * time.Millisecond) <span class="cmt">// Let all goroutines reach the gate</span>
+    fmt.<span class="fn">Println</span>(<span class="str">"3... 2... 1..."</span>)
+    close(gate)  <span class="cmt">// close() broadcasts to ALL receivers simultaneously 🚀
+                 // Unlike send (wakes 1), close wakes everyone at once</span>
+}</pre>
+    </div>
+    <div id="bin-py" class="code-panel">
+<pre><span class="cmt"># ─── Python: Binary Semaphore ─────────────────────────────────────────</span>
+<span class="kw">import</span> threading
+<span class="kw">import</span> time
+
+<span class="cmt"># threading.Semaphore(1) — binary semaphore</span>
+<span class="cmt"># threading.BoundedSemaphore(1) — same, but raises error if released too many times</span>
+signal = threading.Semaphore(<span class="num">0</span>)  <span class="cmt">  # Start at 0 — consumer will block immediately</span>
+
+<span class="kw">def</span> <span class="fn">producer</span>():
+    time.sleep(<span class="num">0.1</span>)
+    <span class="fn">print</span>(<span class="str">"Producer: data ready!"</span>)
+    signal.release()              <span class="cmt">  # Signal: increment count from 0 → 1</span>
+
+<span class="kw">def</span> <span class="fn">consumer</span>():
+    <span class="fn">print</span>(<span class="str">"Consumer: waiting..."</span>)
+    signal.acquire()              <span class="cmt">  # Wait: blocks until count > 0, then decrements</span>
+    <span class="fn">print</span>(<span class="str">"Consumer: processing!"</span>)
+
+t = threading.Thread(target=producer)
+t.start()
+consumer()
+t.join()
+
+<span class="cmt"># ── Mutex vs Binary Semaphore — the key difference ───────────────────
+#
+#   Mutex:
+#     thread A: lock()   ← acquires ownership
+#     thread A: unlock() ← MUST be the same thread
+#
+#   Binary Semaphore:
+#     thread A: release()  ← signals (no ownership)
+#     thread B: acquire()  ← waits and consumes the signal
+#
+# Use binary semaphore for signaling between DIFFERENT threads.
+# Use mutex for protecting data accessed by the SAME thread context.</span></pre>
+    </div>
+  </div>
+  <div class="tip">In Go, closing an unbuffered channel is the idiomatic "broadcast" — it wakes <em>all</em> goroutines waiting on <code>&lt;-ch</code> at once. Sending only wakes one.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     5. RWMUTEX
+════════════════════════════════════════════════════════════════ -->
+<div id="rwmutex" class="section-header reveal">
+  <span class="section-num">05</span>
+  <h2 class="section-title">Read-Write Mutex</h2>
+  <span class="section-tag" style="background:rgba(62,207,142,0.1);color:var(--green)">Read-Optimized Lock</span>
+</div>
+
+<div class="concept-card reveal">
+  <div class="card-header">
+    <div class="card-title-group">
+      <span class="card-badge" style="background:rgba(62,207,142,0.12);color:var(--green)">sync.RWMutex / threading.RLock</span>
+      <div class="card-title">What is a Read-Write Mutex?</div>
+      <div class="card-subtitle">Concurrent reads, exclusive writes</div>
+    </div>
+  </div>
+
+  <p style="color:var(--text2);font-size:0.92rem;margin-bottom:0.75rem;">
+    Reading shared data from multiple goroutines simultaneously is <strong style="color:var(--text)">safe</strong> — they don't modify anything. A regular mutex would block all readers unnecessarily. An RWMutex allows <strong style="color:var(--green)">unlimited concurrent readers</strong>, but when a writer needs access, it gets <strong style="color:var(--red)">exclusive</strong> access — all readers and other writers are blocked until it's done.
+  </p>
+
+  <div class="analogy-box">
+    📚 <strong>Library Analogy:</strong> Many people can read books from the shelf simultaneously (shared read lock). But when the librarian needs to reorganize shelves (write lock), she closes the library — no one reads or writes until she's done. Readers never block each other.
+  </div>
+
+  <div class="explain-grid">
+    <div class="explain-cell"><div class="explain-cell-label">Multiple readers?</div><div class="explain-cell-val"><span class="dot-g">Yes</span> — all hold RLock simultaneously</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Multiple writers?</div><div class="explain-cell-val"><span class="dot-r">No</span> — exclusive</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Reader+Writer?</div><div class="explain-cell-val"><span class="dot-r">No</span> — writer blocks readers</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Best pattern</div><div class="explain-cell-val">reads >> writes</div></div>
+  </div>
+
+  <div style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem;font-family:'Syne',sans-serif;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">When to use</div>
+  <div class="when-strip">
+    <span class="when-tag">in-memory cache</span>
+    <span class="when-tag">config store</span>
+    <span class="when-tag">lookup tables</span>
+    <span class="when-tag">read-heavy shared maps</span>
+    <span class="when-tag">service registry</span>
+  </div>
+
+  <div class="code-tabs">
+    <div class="code-tab-bar">
+      <button class="code-tab-btn active-go" onclick="switchTab(this,'rw-go','rw-py','go')">
+        <span style="color:var(--go)">●</span> Go
+      </button>
+      <button class="code-tab-btn" onclick="switchTab(this,'rw-py','rw-go','py')">
+        <span style="color:var(--py)">●</span> Python
+      </button>
+    </div>
+    <div id="rw-go" class="code-panel active">
+<pre><span class="cmt">// ─── Go: RWMutex — concurrent reads, exclusive writes ────────────────</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"fmt"</span>
+    <span class="str">"sync"</span>
+)
+
+<span class="kw">type</span> SafeCache <span class="kw">struct</span> {
+    mu    sync.RWMutex        <span class="cmt">// RWMutex instead of Mutex</span>
+    store <span class="kw">map</span>[<span class="type">string</span>]<span class="type">string</span>
+}
+
+<span class="kw">func</span> (c *SafeCache) <span class="fn">Get</span>(key <span class="type">string</span>) (<span class="type">string</span>, <span class="type">bool</span>) {
+    c.mu.<span class="fn">RLock</span>()          <span class="cmt">// READ lock: many goroutines can hold this at once ✅</span>
+    <span class="kw">defer</span> c.mu.<span class="fn">RUnlock</span>()  <span class="cmt">// Release read lock</span>
+    v, ok := c.store[key]
+    <span class="kw">return</span> v, ok
+}
+
+<span class="kw">func</span> (c *SafeCache) <span class="fn">Set</span>(key, val <span class="type">string</span>) {
+    c.mu.<span class="fn">Lock</span>()           <span class="cmt">// WRITE lock: exclusive — blocks all readers AND writers ⛔</span>
+    <span class="kw">defer</span> c.mu.<span class="fn">Unlock</span>()   <span class="cmt">// Release write lock</span>
+    c.store[key] = val
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    cache := &SafeCache{store: <span class="fn">make</span>(<span class="kw">map</span>[<span class="type">string</span>]<span class="type">string</span>)}
+    cache.<span class="fn">Set</span>(<span class="str">"name"</span>, <span class="str">"Alice"</span>)
+
+    <span class="kw">var</span> wg sync.WaitGroup
+
+    <span class="cmt">// 20 concurrent readers — all run simultaneously (no blocking between them)</span>
+    <span class="kw">for</span> i := <span class="num">0</span>; i < <span class="num">20</span>; i++ {
+        wg.Add(<span class="num">1</span>)
+        <span class="kw">go</span> <span class="kw">func</span>() {
+            <span class="kw">defer</span> wg.Done()
+            v, _ := cache.<span class="fn">Get</span>(<span class="str">"name"</span>) <span class="cmt">// 20 goroutines read simultaneously ✅</span>
+            _ = v
+        }()
+    }
+
+    <span class="cmt">// 1 writer — waits for all current readers to finish, then gets exclusive access</span>
+    wg.Add(<span class="num">1</span>)
+    <span class="kw">go</span> <span class="kw">func</span>() {
+        <span class="kw">defer</span> wg.Done()
+        cache.<span class="fn">Set</span>(<span class="str">"name"</span>, <span class="str">"Bob"</span>) <span class="cmt">// Writer blocks until all readers done ⛔→✅</span>
+    }()
+
+    wg.Wait()
+    v, _ := cache.<span class="fn">Get</span>(<span class="str">"name"</span>)
+    fmt.<span class="fn">Println</span>(<span class="str">"name:"</span>, v)
+}
+
+<span class="cmt">// Performance: RWMutex can be 5-10x faster than Mutex for read-heavy workloads</span></pre>
+    </div>
+    <div id="rw-py" class="code-panel">
+<pre><span class="cmt"># ─── Python: Read-Write Lock ──────────────────────────────────────────</span>
+<span class="kw">import</span> threading
+
+<span class="cmt"># Python's threading module doesn't ship an RWLock, so we build one.
+# Pattern: track reader count; writers wait for zero readers.</span>
+<span class="kw">class</span> <span class="type">RWLock</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self._readers = <span class="num">0</span>
+        self._read_lock  = threading.Lock()   <span class="cmt">  # Protects _readers count</span>
+        self._write_lock = threading.Lock()   <span class="cmt">  # Exclusive for writers</span>
+
+    <span class="kw">def</span> <span class="fn">acquire_read</span>(self):
+        <span class="kw">with</span> self._read_lock:
+            self._readers += <span class="num">1</span>
+            <span class="kw">if</span> self._readers == <span class="num">1</span>:  <span class="cmt">  # First reader blocks writers</span>
+                self._write_lock.acquire()
+
+    <span class="kw">def</span> <span class="fn">release_read</span>(self):
+        <span class="kw">with</span> self._read_lock:
+            self._readers -= <span class="num">1</span>
+            <span class="kw">if</span> self._readers == <span class="num">0</span>:  <span class="cmt">  # Last reader unblocks writers</span>
+                self._write_lock.release()
+
+    <span class="kw">def</span> <span class="fn">acquire_write</span>(self):
+        self._write_lock.acquire()  <span class="cmt">  # Exclusive — blocks all readers+writers</span>
+
+    <span class="kw">def</span> <span class="fn">release_write</span>(self):
+        self._write_lock.release()
+
+<span class="cmt"># Usage</span>
+rw = RWLock()
+cache = {}
+
+<span class="kw">def</span> <span class="fn">read_cache</span>(key):
+    rw.acquire_read()
+    <span class="kw">try</span>:
+        <span class="kw">return</span> cache.get(key)     <span class="cmt">  # Multiple threads can be here at once</span>
+    <span class="kw">finally</span>:
+        rw.release_read()
+
+<span class="kw">def</span> <span class="fn">write_cache</span>(key, val):
+    rw.acquire_write()
+    <span class="kw">try</span>:
+        cache[key] = val          <span class="cmt">  # Exclusive access</span>
+    <span class="kw">finally</span>:
+        rw.release_write()
+
+<span class="cmt"># Tip: The 'rwlock' pip package provides a production-ready version.
+# pip install rwlock
+# from rwlock import RWLock</span></pre>
+    </div>
+  </div>
+  <div class="gotcha">Don't upgrade an RLock to a Lock in the same goroutine — deadlock! Release the read lock first, then acquire the write lock.</div>
+  <div class="tip">If writes are frequent (>30% of operations), a plain Mutex may outperform RWMutex due to lower overhead. Profile first.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     6. PRIORITY INHERITANCE MUTEX
+════════════════════════════════════════════════════════════════ -->
+<div id="priority" class="section-header reveal">
+  <span class="section-num">06</span>
+  <h2 class="section-title">Priority Inheritance Mutex</h2>
+  <span class="section-tag" style="background:rgba(155,143,245,0.1);color:var(--accent2)">Advanced / RT Systems</span>
+</div>
+
+<div class="concept-card reveal">
+  <div class="card-header">
+    <div class="card-title-group">
+      <span class="card-badge" style="background:rgba(155,143,245,0.12);color:var(--accent2)">custom / POSIX PTHREAD_PRIO_INHERIT</span>
+      <div class="card-title">What is Priority Inversion?</div>
+      <div class="card-subtitle">When a low-priority task starves a high-priority one</div>
+    </div>
+  </div>
+
+  <p style="color:var(--text2);font-size:0.92rem;margin-bottom:0.75rem;">
+    In systems with task priorities, <strong style="color:var(--red)">priority inversion</strong> occurs when: a low-priority task holds a lock, a high-priority task needs it and blocks, but a medium-priority task (needing no lock) runs freely — effectively making the high-priority task wait behind medium. <strong style="color:var(--accent2)">Priority inheritance</strong> solves this by temporarily boosting the low-priority task's priority to match the waiting high-priority task.
+  </p>
+
+  <div class="analogy-box">
+    👑 <strong>Classic Example — Mars Pathfinder (1997):</strong> NASA's Mars rover experienced resets due to priority inversion. A low-priority task held a shared bus lock, a high-priority task blocked on it, but a medium-priority task kept running. The watchdog timer saw the high-priority task not completing and reset the system. Priority inheritance was patched remotely.
+  </div>
+
+  <div class="diagram">
+    <pre style="background:transparent;border:none;border-radius:0;padding:0;font-size:0.78rem;color:var(--text2)">
+WITHOUT priority inheritance:           WITH priority inheritance:
+                                        
+HIGH   ████░░░░░░░░░░░░████            HIGH   ████░░░░████████████
+       blocked (waiting for lock)              blocks briefly, then runs
+
+MED    ░░░░████████████░░░░            MED    ░░░░░░░░░░░░████░░░░
+       runs freely (no lock needed)            waits for HIGH to finish
+
+LOW    ████░░░░░░░░░░░░░░░░            LOW    ████████░░░░░░░░░░░░
+       holds lock, preempted by MED           boosted to HIGH priority
+
+       ← MED starves HIGH task →              ← Inversion resolved ✅ →
+    </pre>
+  </div>
+
+  <div class="explain-grid">
+    <div class="explain-cell"><div class="explain-cell-label">Problem</div><div class="explain-cell-val">High-priority task starved by medium</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Solution</div><div class="explain-cell-val">Boost low task priority temporarily</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Go support?</div><div class="explain-cell-val">No native — simulate with channels</div></div>
+    <div class="explain-cell"><div class="explain-cell-label">Python support?</div><div class="explain-cell-val">No native — simulate with queue</div></div>
+  </div>
+
+  <div style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem;font-family:'Syne',sans-serif;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">When to use</div>
+  <div class="when-strip">
+    <span class="when-tag">real-time systems</span>
+    <span class="when-tag">embedded / RTOS</span>
+    <span class="when-tag">audio / video pipelines</span>
+    <span class="when-tag">safety-critical software</span>
+  </div>
+
+  <div class="code-tabs">
+    <div class="code-tab-bar">
+      <button class="code-tab-btn active-go" onclick="switchTab(this,'pri-go','pri-py','go')">
+        <span style="color:var(--go)">●</span> Go
+      </button>
+      <button class="code-tab-btn" onclick="switchTab(this,'pri-py','pri-go','py')">
+        <span style="color:var(--py)">●</span> Python
+      </button>
+    </div>
+    <div id="pri-go" class="code-panel active">
+<pre><span class="cmt">// ─── Go: Simulating Priority-Aware Mutex ─────────────────────────────</span>
+<span class="kw">package</span> main
+
+<span class="kw">import</span> (
+    <span class="str">"context"</span>
+    <span class="str">"fmt"</span>
+    <span class="str">"sort"</span>
+    <span class="str">"sync"</span>
+    <span class="str">"time"</span>
+)
+
+<span class="kw">type</span> PriorityRequest <span class="kw">struct</span> {
+    name     <span class="type">string</span>
+    priority <span class="type">int</span>       <span class="cmt">// higher = more urgent</span>
+    ready    <span class="kw">chan</span> <span class="kw">struct</span>{}
+}
+
+<span class="kw">type</span> PriorityMutex <span class="kw">struct</span> {
+    mu       sync.Mutex
+    queue    []*PriorityRequest   <span class="cmt">// waiters sorted by priority</span>
+    queueMu  sync.Mutex
+    locked   <span class="type">bool</span>
+}
+
+<span class="kw">func</span> (pm *PriorityMutex) <span class="fn">Lock</span>(ctx context.Context, name <span class="type">string</span>, priority <span class="type">int</span>) error {
+    req := &PriorityRequest{
+        name:     name,
+        priority: priority,
+        ready:    <span class="fn">make</span>(<span class="kw">chan</span> <span class="kw">struct</span>{}),
+    }
+
+    pm.queueMu.Lock()
+    pm.queue = <span class="fn">append</span>(pm.queue, req)
+    <span class="cmt">// Keep queue sorted: highest priority first</span>
+    <span class="fn">sort</span>.Slice(pm.queue, <span class="kw">func</span>(i, j <span class="type">int</span>) <span class="type">bool</span> {
+        <span class="kw">return</span> pm.queue[i].priority > pm.queue[j].priority
+    })
+    pm.queueMu.Unlock()
+
+    <span class="cmt">// Try to acquire in a goroutine — this queues us</span>
+    <span class="kw">go</span> <span class="kw">func</span>() {
+        pm.mu.Lock()       <span class="cmt">// Block here until the actual mutex is free</span>
+        close(req.ready)  <span class="cmt">// Signal: we have the mutex now</span>
+    }()
+
+    select {
+    case &lt;-req.ready:
+        fmt.<span class="fn">Printf</span>(<span class="str">"[%s] priority=%d: acquired lock ✅\n"</span>, name, priority)
+        <span class="kw">return</span> <span class="kw">nil</span>
+    case &lt;-ctx.<span class="fn">Done</span>():
+        fmt.<span class="fn">Printf</span>(<span class="str">"[%s] priority=%d: timed out ⏰\n"</span>, name, priority)
+        <span class="kw">return</span> ctx.<span class="fn">Err</span>()
+    }
+}
+
+<span class="kw">func</span> (pm *PriorityMutex) <span class="fn">Unlock</span>(name <span class="type">string</span>) {
+    fmt.<span class="fn">Printf</span>(<span class="str">"[%s] released lock 🔓\n"</span>, name)
+    pm.mu.Unlock() <span class="cmt">// Frees the underlying mutex — highest-priority waiter will get it next</span>
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    pm := &PriorityMutex{}
+
+    <span class="cmt">// Low-priority task grabs the lock first, holds it for 300ms</span>
+    <span class="kw">go</span> <span class="kw">func</span>() {
+        ctx := context.<span class="fn">Background</span>()
+        pm.<span class="fn">Lock</span>(ctx, <span class="str">"low-task"</span>, <span class="num">1</span>)
+        fmt.<span class="fn">Println</span>(<span class="str">"low-task: doing slow work..."</span>)
+        time.<span class="fn">Sleep</span>(<span class="num">300</span> * time.Millisecond)
+        pm.<span class="fn">Unlock</span>(<span class="str">"low-task"</span>)
+    }()
+
+    time.<span class="fn">Sleep</span>(<span class="num">10</span> * time.Millisecond) <span class="cmt">// Ensure low grabs lock first</span>
+
+    <span class="cmt">// High-priority task needs the lock — gets it BEFORE any medium-priority waiters</span>
+    ctx, cancel := context.<span class="fn">WithTimeout</span>(context.<span class="fn">Background</span>(), <span class="num">500</span>*time.Millisecond)
+    <span class="kw">defer</span> <span class="fn">cancel</span>()
+
+    <span class="kw">if</span> err := pm.<span class="fn">Lock</span>(ctx, <span class="str">"high-task"</span>, <span class="num">10</span>); err != <span class="kw">nil</span> {
+        fmt.<span class="fn">Println</span>(<span class="str">"Priority inversion: high-task could not get lock!"</span>)
+    } <span class="kw">else</span> {
+        time.<span class="fn">Sleep</span>(<span class="num">50</span> * time.Millisecond)
+        pm.<span class="fn">Unlock</span>(<span class="str">"high-task"</span>)
+    }
+
+    time.<span class="fn">Sleep</span>(<span class="num">500</span> * time.Millisecond) <span class="cmt">// Let everything finish</span>
+}
+
+<span class="cmt">// 📌 For true priority inheritance: use os/exec + POSIX threads (cgo),
+//    or design with priority queues + golang.org/x/sync/semaphore</span></pre>
+    </div>
+    <div id="pri-py" class="code-panel">
+<pre><span class="cmt"># ─── Python: Priority-Aware Lock with heapq ──────────────────────────</span>
+<span class="kw">import</span> threading
+<span class="kw">import</span> heapq
+<span class="kw">import</span> time
+
+<span class="kw">class</span> <span class="type">PriorityLock</span>:
+    <span class="str">"""
+    Lock that serves waiters in priority order.
+    Higher priority number = served first.
+    """</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self._lock     = threading.Lock()       <span class="cmt">  # Underlying mutex</span>
+        self._heap     = []                     <span class="cmt">  # Min-heap of (-priority, event)</span>
+        self._heap_mu  = threading.Lock()       <span class="cmt">  # Protect the heap</span>
+
+    <span class="kw">def</span> <span class="fn">acquire</span>(self, priority: int, name: str, timeout=<span class="kw">None</span>):
+        event = threading.Event()
+
+        <span class="kw">with</span> self._heap_mu:
+            <span class="cmt"># negate priority so heapq (min-heap) serves highest first</span>
+            heapq.heappush(self._heap, (-priority, name, event))
+
+        <span class="cmt"># Spin-wait until we're at the front of the queue AND we can get the lock</span>
+        deadline = time.time() + (timeout <span class="kw">if</span> timeout <span class="kw">else</span> <span class="fn">float</span>(<span class="str">'inf'</span>))
+        <span class="kw">while</span> time.time() < deadline:
+            <span class="kw">with</span> self._heap_mu:
+                top = self._heap[<span class="num">0</span>][<span class="num">2</span>]      <span class="cmt">  # Event of highest-priority waiter</span>
+
+            <span class="kw">if</span> top <span class="kw">is</span> event <span class="kw">and</span> self._lock.acquire(blocking=<span class="kw">False</span>):
+                <span class="kw">with</span> self._heap_mu:
+                    heapq.heappop(self._heap)
+                <span class="fn">print</span>(<span class="str">f"[{name}] priority={priority}: acquired ✅"</span>)
+                <span class="kw">return True</span>
+            time.sleep(<span class="num">0.005</span>)              <span class="cmt">  # Yield — check again soon</span>
+
+        <span class="cmt"># Timeout: remove from queue</span>
+        <span class="kw">with</span> self._heap_mu:
+            self._heap = [(p,n,e) <span class="kw">for</span> p,n,e <span class="kw">in</span> self._heap <span class="kw">if</span> e <span class="kw">is not</span> event]
+            heapq.heapify(self._heap)
+        <span class="fn">print</span>(<span class="str">f"[{name}] priority={priority}: timed out ⏰"</span>)
+        <span class="kw">return False</span>
+
+    <span class="kw">def</span> <span class="fn">release</span>(self, name: str):
+        <span class="fn">print</span>(<span class="str">f"[{name}] released 🔓"</span>)
+        self._lock.release()
+
+<span class="cmt"># Usage</span>
+pl = PriorityLock()
+
+<span class="kw">def</span> <span class="fn">task</span>(name, priority, hold_time, delay):
+    time.sleep(delay)
+    <span class="kw">if</span> pl.acquire(priority, name, timeout=<span class="num">1.0</span>):
+        time.sleep(hold_time)
+        pl.release(name)
+
+threads = [
+    threading.Thread(target=task, args=(<span class="str">"low"</span>,  <span class="num">1</span>,  <span class="num">0.3</span>, <span class="num">0.00</span>)),
+    threading.Thread(target=task, args=(<span class="str">"high"</span>, <span class="num">10</span>, <span class="num">0.1</span>, <span class="num">0.01</span>)),
+    threading.Thread(target=task, args=(<span class="str">"med"</span>,  <span class="num">5</span>,  <span class="num">0.1</span>, <span class="num">0.01</span>)),
+]
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.start()
+<span class="kw">for</span> t <span class="kw">in</span> threads: t.join()</pre>
+    </div>
+  </div>
+  <div class="gotcha">Go and Python do not expose OS-level thread priority control. For true POSIX priority inheritance (PTHREAD_PRIO_INHERIT), you need C/cgo or a real-time OS. The patterns above are user-space approximations.</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     COMPARISON TABLE
+════════════════════════════════════════════════════════════════ -->
+<div id="compare" class="section-header reveal">
+  <span class="section-num">07</span>
+  <h2 class="section-title">Side-by-Side Comparison</h2>
+  <span class="section-tag" style="background:rgba(110,107,250,0.1);color:var(--accent)">Quick Reference</span>
+</div>
+
+<div class="concept-card reveal" style="padding:0;overflow:hidden">
+  <table class="cmp-table">
+    <thead>
+      <tr>
+        <th>Primitive</th>
+        <th>Concurrency</th>
+        <th>Ownership</th>
+        <th>CPU while waiting</th>
+        <th>Primary use</th>
+        <th>Go API</th>
+        <th>Python API</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Mutex</td>
+        <td>1 at a time</td>
+        <td><span class="dot-g">Yes</span></td>
+        <td><span class="dot-g">Zero (sleeps)</span></td>
+        <td>Protect shared state</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--go)">sync.Mutex</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--py)">threading.Lock</td>
+      </tr>
+      <tr>
+        <td>Counting Semaphore</td>
+        <td>Up to N</td>
+        <td><span class="dot-r">No</span></td>
+        <td><span class="dot-g">Zero (sleeps)</span></td>
+        <td>Limit concurrency</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--go)">chan (buf N)</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--py)">threading.Semaphore</td>
+      </tr>
+      <tr>
+        <td>Spin Lock</td>
+        <td>1 at a time</td>
+        <td><span class="dot-g">Yes</span></td>
+        <td><span class="dot-r">High (spins)</span></td>
+        <td>Ultra-short critical sections</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--go)">atomic.CAS</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--py)">Lock(blocking=False)</td>
+      </tr>
+      <tr>
+        <td>Binary Semaphore</td>
+        <td>0 or 1</td>
+        <td><span class="dot-r">No</span></td>
+        <td><span class="dot-g">Zero (sleeps)</span></td>
+        <td>Cross-goroutine signaling</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--go)">chan (buf 1)</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--py)">Semaphore(0)</td>
+      </tr>
+      <tr>
+        <td>RWMutex</td>
+        <td>∞ readers / 1 writer</td>
+        <td><span class="dot-g">Yes</span></td>
+        <td><span class="dot-g">Zero (sleeps)</span></td>
+        <td>Read-heavy shared data</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--go)">sync.RWMutex</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--py)">Custom / rwlock pkg</td>
+      </tr>
+      <tr>
+        <td>Priority Mutex</td>
+        <td>1 at a time</td>
+        <td><span class="dot-g">Yes</span></td>
+        <td><span class="dot-g">Zero (sleeps)</span></td>
+        <td>RT / prevent starvation</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--go)">Custom (heapq+chan)</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--py)">Custom (heapq)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="concept-card reveal" style="margin-top:1.25rem">
+  <div class="card-title" style="margin-bottom:1rem">Decision Guide — Which should I use?</div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.82rem;line-height:2;color:var(--text2)">
+    <div>Need to protect shared data from concurrent writes?     → <span style="color:var(--accent)">Mutex</span></div>
+    <div>Mostly reading, rarely writing?                         → <span style="color:var(--green)">RWMutex</span></div>
+    <div>Limit how many goroutines run a section at once?        → <span style="color:var(--go)">Counting Semaphore</span></div>
+    <div>Notify another goroutine that something happened?       → <span style="color:var(--pink)">Binary Semaphore / channel</span></div>
+    <div>Lock held for nanoseconds, ultra-hot path?              → <span style="color:var(--orange)">Spin Lock (use carefully)</span></div>
+    <div>Real-time system, need to prevent priority inversion?   → <span style="color:var(--accent2)">Priority Inheritance Mutex</span></div>
+    <div>Communicating data between goroutines?                  → <span style="color:var(--go)">Channel (Go's first choice)</span></div>
+  </div>
+  <div class="tip" style="margin-top:1.25rem">Go's mantra: <em>"Do not communicate by sharing memory; instead, share memory by communicating."</em> Reach for channels first, mutexes when you genuinely need shared state.</div>
+</div>
+
+</main>
+
+<footer>
+  SYNC PRIMITIVES REFERENCE &nbsp;·&nbsp; GO &amp; PYTHON &nbsp;·&nbsp; BUILT WITH CLAUDE
+</footer>
+
+<script>
+/* Tab switching */
+function switchTab(btn, showId, hideId, lang) {
+  document.getElementById(showId).classList.add('active');
+  document.getElementById(hideId).classList.remove('active');
+  const bar = btn.closest('.code-tab-bar');
+  bar.querySelectorAll('.code-tab-btn').forEach(b => {
+    b.classList.remove('active-go','active-py');
+  });
+  btn.classList.add('active-' + lang);
+}
+
+/* Intersection Observer for reveal animations */
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach((entry, i) => {
+    if (entry.isIntersecting) {
+      setTimeout(() => entry.target.classList.add('visible'), i * 60);
+      observer.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.08 });
+
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>
