@@ -1,4 +1,4 @@
-Mechanism	Type	Primary Purpose	Ownership Mechanism	Operation States	Signaling vs Locking	Inter-process Support
-Mutex	Kernel object	Mutual Exclusion	Strict ownership (only the thread that locked the mutex can unlock it)	Binary (Locked/Unlocked)	Locking mechanism (key-based)	Can be shared across processes or limited to threads within a single process
-Binary Semaphore	Integer variable / Kernel resource	Mutual Exclusion / Coordination	No ownership (any thread can release/signal it)	Binary (0 or 1)	Signaling mechanism	Can be shared between processes
-Counting Semaphore	Integer variable / Kernel resource	Resource Pooling	No ownership (any thread can release/signal it)	Non-negative integers ( $0, 1, 2, \dots$  up to a limit)	Signaling mechanism	Can be shared between processes
+Mechanism,Type,Primary Purpose,Ownership Mechanism,Operation States,Signaling vs Locking,Inter-process Support
+Mutex,Kernel object,Mutual Exclusion,Strict ownership (only the thread that locked the mutex can unlock it),Binary (Locked/Unlocked),Locking mechanism (key-based),Can be shared across processes or limited to threads within a single process
+Binary Semaphore,Integer variable / Kernel resource,Mutual Exclusion / Coordination,No ownership (any thread can release/signal it),Binary (0 or 1),Signaling mechanism,Can be shared between processes
+Counting Semaphore,Integer variable / Kernel resource,Resource Pooling,No ownership (any thread can release/signal it),"Non-negative integers ( $0, 1, 2, \dots$  up to a limit)",Signaling mechanism,Can be shared between processes
